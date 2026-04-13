@@ -10,10 +10,35 @@ public extension URL {
 				appropriateFor: nil,
 				create: true
 			)
-			let hexDirectory = appSupport.appendingPathComponent("com.kitlangton.Hex", isDirectory: true)
+			let hexDirectory = preferredHexApplicationSupport(
+				using: fm,
+				appSupportDirectory: appSupport,
+				homeDirectory: fm.homeDirectoryForCurrentUser
+			)
 			try fm.createDirectory(at: hexDirectory, withIntermediateDirectories: true)
 			return hexDirectory
 		}
+	}
+
+	static func preferredHexApplicationSupport(
+		using fm: FileManager,
+		appSupportDirectory: URL,
+		homeDirectory: URL
+	) -> URL {
+		let defaultHexDirectory = appSupportDirectory.appendingPathComponent("com.kitlangton.Hex", isDirectory: true)
+		let sharedContainerHexDirectory = homeDirectory
+			.appendingPathComponent("Library/Containers/com.kitlangton.Hex/Data/Library/Application Support/com.kitlangton.Hex", isDirectory: true)
+
+		// Unsandboxed local builds otherwise create a parallel settings/models store under
+		// ~/Library/Application Support. If the official sandbox container already exists,
+		// prefer it so locally built copies inherit the user's current Hex data.
+		guard defaultHexDirectory.standardizedFileURL != sharedContainerHexDirectory.standardizedFileURL,
+			  fm.fileExists(atPath: sharedContainerHexDirectory.path)
+		else {
+			return defaultHexDirectory
+		}
+
+		return sharedContainerHexDirectory
 	}
 
 	static var legacyDocumentsDirectory: URL {
