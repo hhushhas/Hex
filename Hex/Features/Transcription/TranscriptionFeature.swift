@@ -97,8 +97,8 @@ struct TranscriptionFeature {
       // MARK: - HotKey Flow
 
       case .hotKeyPressed:
-        // If we're transcribing, send a cancel first. Otherwise start recording immediately.
-        // We'll decide later (on release) whether to keep or discard the recording.
+        // Ignore repeat presses while transcribing so accidental modifier twitches
+        // cannot cancel the active transcription and start over.
         return handleHotKeyPressed(isTranscribing: state.isTranscribing)
 
       case .hotKeyReleased:
@@ -262,13 +262,17 @@ private extension TranscriptionFeature {
 // MARK: - HotKey Press/Release Handlers
 
 private extension TranscriptionFeature {
+  /// Starts a recording unless a transcription is already in flight.
   func handleHotKeyPressed(isTranscribing: Bool) -> Effect<Action> {
-    // If already transcribing, cancel first. Otherwise start recording immediately.
-    let maybeCancel = isTranscribing ? Effect.send(Action.cancel) : .none
-    let startRecording = Effect.send(Action.startRecording)
-    return .merge(maybeCancel, startRecording)
+    // Ignore accidental post-release hotkey twitches while transcription is active.
+    // Users can still cancel intentionally with Escape.
+    guard !isTranscribing else {
+      return .none
+    }
+    return .send(.startRecording)
   }
 
+  /// Stops an active recording when the configured hotkey is released.
   func handleHotKeyReleased(isRecording: Bool) -> Effect<Action> {
     // Always stop recording when hotkey is released
     return isRecording ? .send(.stopRecording) : .none
