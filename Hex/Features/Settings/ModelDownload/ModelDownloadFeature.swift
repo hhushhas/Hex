@@ -17,12 +17,12 @@ import IdentifiedCollections
 
 public struct ModelInfo: Equatable, Identifiable {
 	public let name: String
-	public var isDownloaded: Bool
+	public var isReady: Bool
 
 	public var id: String { name }
-	public init(name: String, isDownloaded: Bool) {
+	public init(name: String, isReady: Bool) {
 		self.name = name
-		self.isDownloaded = isDownloaded
+		self.isReady = isReady
 	}
 }
 
@@ -33,7 +33,9 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 	public let accuracyStars: Int
 	public let speedStars: Int
 	public let storageSize: String
-	public var isDownloaded: Bool
+	public let providerName: String?
+	public let symbolName: String?
+	public var isReady: Bool
 	public var id: String { internalName }
 
 	public var badge: String? {
@@ -55,6 +57,14 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		parakeetModel != nil
 	}
 
+	var isGroq: Bool {
+		GroqTranscriptionModel(rawValue: internalName) != nil
+	}
+
+	var isCloud: Bool {
+		TranscriptionModelCatalog.isCloud(internalName)
+	}
+
 	public init(
 		displayName: String,
 		internalName: String,
@@ -62,7 +72,9 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		accuracyStars: Int,
 		speedStars: Int,
 		storageSize: String,
-		isDownloaded: Bool
+		providerName: String? = nil,
+		symbolName: String? = nil,
+		isReady: Bool
 	) {
 		self.displayName = displayName
 		self.internalName = internalName
@@ -70,11 +82,15 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		self.accuracyStars = accuracyStars
 		self.speedStars = speedStars
 		self.storageSize = storageSize
-		self.isDownloaded = isDownloaded
+		self.providerName = providerName
+		self.symbolName = symbolName
+		self.isReady = isReady
 	}
 
-	// Codable (isDownloaded is set at runtime)
-	private enum CodingKeys: String, CodingKey { case displayName, internalName, size, accuracyStars, speedStars, storageSize }
+	// Codable (isReady is set at runtime)
+	private enum CodingKeys: String, CodingKey {
+		case displayName, internalName, size, accuracyStars, speedStars, storageSize, providerName, symbolName
+	}
 	public init(from decoder: Decoder) throws {
 		let c = try decoder.container(keyedBy: CodingKeys.self)
 		displayName = try c.decode(String.self, forKey: .displayName)
@@ -83,7 +99,9 @@ public struct CuratedModelInfo: Equatable, Identifiable, Codable {
 		accuracyStars = try c.decode(Int.self, forKey: .accuracyStars)
 		speedStars = try c.decode(Int.self, forKey: .speedStars)
 		storageSize = try c.decode(String.self, forKey: .storageSize)
-		isDownloaded = false
+		providerName = try c.decodeIfPresent(String.self, forKey: .providerName)
+		symbolName = try c.decodeIfPresent(String.self, forKey: .symbolName)
+		isReady = false
 	}
 }
 
@@ -131,18 +149,33 @@ public struct ModelDownloadFeature {
 		public var downloadProgress: Double = 0
 		public var downloadError: String?
 		public var downloadingModelName: String?
+		public var groqAPIKeyInput: String = ""
+		public var groqCredentialError: String?
+		public var isSavingGroqAPIKey = false
 
 		// Track which model generated a progress update to handle switching models
 		public var activeDownloadID: UUID?
 
 		// Convenience computed vars
 		var selectedModel: String { hexSettings.selectedModel }
-		var selectedModelIsDownloaded: Bool {
-			availableModels[id: selectedModel]?.isDownloaded ?? false
+		var selectedModelIsReady: Bool {
+			availableModels[id: selectedModel]?.isReady ?? false
 		}
 
-		var anyModelDownloaded: Bool {
-			availableModels.contains(where: { $0.isDownloaded })
+		var anyModelReady: Bool {
+			availableModels.contains(where: { $0.isReady })
+		}
+
+		var selectedCuratedModel: CuratedModelInfo? {
+			curatedModels.first(where: { ModelPatternMatcher.matches($0.internalName, selectedModel) })
+		}
+
+		var selectedModelIsCloud: Bool {
+			selectedCuratedModel?.isCloud ?? TranscriptionModelCatalog.isCloud(selectedModel)
+		}
+
+		var selectedModelProviderName: String? {
+			selectedCuratedModel?.providerName
 		}
 	}
 
@@ -160,6 +193,11 @@ public struct ModelDownloadFeature {
 		case downloadProgress(Double)
 		case downloadCompleted(Result<String, Error>)
 		case cancelDownload
+		case groqAPIKeyInputChanged(String)
+		case saveGroqAPIKey
+		case groqAPIKeySaved(Result<Void, Error>)
+		case deleteGroqAPIKey
+		case groqAPIKeyDeleted(Result<Void, Error>)
 
 		case deleteSelectedModel
 		case openModelLocation
@@ -168,6 +206,7 @@ public struct ModelDownloadFeature {
 	// MARK: Dependencies
 
 	@Dependency(\.transcription) var transcription
+	@Dependency(\.groqAPIKey) var groqAPIKey
 
 	public init() {}
 
@@ -181,7 +220,7 @@ public struct ModelDownloadFeature {
 	// MARK: - Helpers (pattern matching)
 
 	private func resolvePattern(_ pattern: String, from available: [ModelInfo]) -> String? {
-		ModelPatternMatcher.resolvePattern(pattern, from: available.map { ($0.name, $0.isDownloaded) })
+		ModelPatternMatcher.resolvePattern(pattern, from: available.map { (name: $0.name, isDownloaded: $0.isReady) })
 	}
 
 	private func curatedDisplayName(for model: String, curated: IdentifiedArrayOf<CuratedModelInfo>) -> String {
@@ -201,11 +240,26 @@ public struct ModelDownloadFeature {
 		state.$modelBootstrapState.withLock { bootstrap in
 			bootstrap.modelIdentifier = model
 			bootstrap.modelDisplayName = displayName
-			bootstrap.isModelReady = state.selectedModelIsDownloaded
-			if state.selectedModelIsDownloaded {
+			bootstrap.isModelReady = state.selectedModelIsReady
+			if state.selectedModelIsReady {
 				bootstrap.lastError = nil
 				bootstrap.progress = 1
+			} else {
+				bootstrap.progress = 0
 			}
+		}
+	}
+
+	private func setModelReady(_ modelName: String, isReady: Bool, state: inout State) {
+		state.availableModels[id: modelName]?.isReady = isReady
+		for index in state.curatedModels.indices where ModelPatternMatcher.matches(state.curatedModels[index].internalName, modelName) {
+			state.curatedModels[index].isReady = isReady
+		}
+	}
+
+	private func setGroqModelsReady(_ isReady: Bool, state: inout State) {
+		for model in GroqTranscriptionModel.allCases {
+			setModelReady(model.rawValue, isReady: isReady, state: &state)
 		}
 	}
 
@@ -214,6 +268,11 @@ public struct ModelDownloadFeature {
 		// MARK: – UI bindings
 
 		case .binding:
+			return .none
+
+		case let .groqAPIKeyInputChanged(value):
+			state.groqAPIKeyInput = value
+			state.groqCredentialError = nil
 			return .none
 
 		case .toggleModelDisplay:
@@ -238,14 +297,16 @@ public struct ModelDownloadFeature {
 					async let recommendedSupportTask = transcription.getRecommendedModels()
 					async let availableNamesTask = transcription.getAvailableModels()
 					let recommendedSupport = try await recommendedSupportTask
-					let names = try await availableNamesTask
+					var names = try await availableNamesTask
+					names.append(contentsOf: GroqTranscriptionModel.allCases.map(\.rawValue))
+					names = Array(Set(names)).sorted()
 					let recommended = recommendedSupport.default
 					let infos = try await withThrowingTaskGroup(of: ModelInfo.self) { group -> [ModelInfo] in
 						for name in names {
 							group.addTask {
 								ModelInfo(
 									name: name,
-									isDownloaded: await transcription.isModelDownloaded(name)
+									isReady: await transcription.isModelReady(name)
 								)
 							}
 						}
@@ -263,7 +324,7 @@ public struct ModelDownloadFeature {
 			var availablePlus = available
 			for model in ParakeetModel.allCases.reversed() {
 				if !availablePlus.contains(where: { $0.name == model.identifier }) {
-					availablePlus.insert(ModelInfo(name: model.identifier, isDownloaded: false), at: 0)
+					availablePlus.insert(ModelInfo(name: model.identifier, isReady: false), at: 0)
 				}
 			}
 
@@ -286,26 +347,19 @@ public struct ModelDownloadFeature {
 			for idx in curated.indices {
 				let internalName = curated[idx].internalName
 				if let match = available.first(where: { ModelPatternMatcher.matches(internalName, $0.name) }) {
-					curated[idx].isDownloaded = match.isDownloaded
+					curated[idx].isReady = match.isReady
 				} else {
-					curated[idx].isDownloaded = false
+					curated[idx].isReady = false
 				}
 			}
 			state.curatedModels = IdentifiedArrayOf(uniqueElements: curated)
 			updateBootstrapState(&state)
-			if !state.anyModelDownloaded && !state.hexSettings.hasCompletedModelBootstrap {
-				let preferred = state.recommendedModel.isEmpty ? state.hexSettings.selectedModel : state.recommendedModel
-				if !preferred.isEmpty {
-					state.$hexSettings.withLock { $0.selectedModel = preferred }
-					updateBootstrapState(&state)
-				}
-			}
 			return .none
 
 		// MARK: – Download
 
 		case .downloadSelectedModel:
-			guard !state.hexSettings.selectedModel.isEmpty else { return .none }
+			guard !state.hexSettings.selectedModel.isEmpty, !state.selectedModelIsCloud else { return .none }
 			state.downloadError = nil
 			state.isDownloading = true
 			let selected = state.hexSettings.selectedModel
@@ -347,10 +401,7 @@ public struct ModelDownloadFeature {
 			var failureMessage: String?
 			switch result {
 			case let .success(name):
-				state.availableModels[id: name]?.isDownloaded = true
-				if let idx = state.curatedModels.firstIndex(where: { $0.internalName == name }) {
-					state.curatedModels[idx].isDownloaded = true
-				}
+				setModelReady(name, isReady: true, state: &state)
 				state.$hexSettings.withLock { settings in
 					settings.hasCompletedModelBootstrap = true
 				}
@@ -396,8 +447,60 @@ public struct ModelDownloadFeature {
 			}
 			return .cancel(id: id)
 
+		case .saveGroqAPIKey:
+			guard state.selectedModelIsCloud else { return .none }
+			state.isSavingGroqAPIKey = true
+			state.groqCredentialError = nil
+			let apiKey = state.groqAPIKeyInput
+			return .run { send in
+				do {
+					try await groqAPIKey.saveAPIKey(apiKey)
+					await send(.groqAPIKeySaved(.success(())))
+				} catch {
+					await send(.groqAPIKeySaved(.failure(error)))
+				}
+			}
+
+		case let .groqAPIKeySaved(result):
+			state.isSavingGroqAPIKey = false
+			switch result {
+			case .success:
+				state.groqAPIKeyInput = ""
+				state.groqCredentialError = nil
+				setGroqModelsReady(true, state: &state)
+				state.downloadError = nil
+				state.$hexSettings.withLock { $0.hasCompletedModelBootstrap = true }
+				updateBootstrapState(&state)
+			case let .failure(error):
+				state.groqCredentialError = error.localizedDescription
+			}
+			return .none
+
+		case .deleteGroqAPIKey:
+			guard state.selectedModelIsCloud else { return .none }
+			return .run { send in
+				do {
+					try await groqAPIKey.deleteAPIKey()
+					await send(.groqAPIKeyDeleted(.success(())))
+				} catch {
+					await send(.groqAPIKeyDeleted(.failure(error)))
+				}
+			}
+
+		case let .groqAPIKeyDeleted(result):
+			switch result {
+			case .success:
+				setGroqModelsReady(false, state: &state)
+				state.groqAPIKeyInput = ""
+				state.groqCredentialError = nil
+				updateBootstrapState(&state)
+			case let .failure(error):
+				state.groqCredentialError = error.localizedDescription
+			}
+			return .none
+
 		case .deleteSelectedModel:
-			guard !state.selectedModel.isEmpty else { return .none }
+			guard !state.selectedModel.isEmpty, !state.selectedModelIsCloud else { return .none }
 			state.$modelBootstrapState.withLock { $0.isModelReady = false }
 			return .run { [state] send in
 				do {

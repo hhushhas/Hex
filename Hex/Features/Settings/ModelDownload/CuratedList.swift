@@ -10,13 +10,13 @@ struct CuratedList: View {
 		if store.showAllModels {
 			return Array(store.curatedModels)
 		} else {
-			// Show only Parakeet by default
-			return store.curatedModels.filter { $0.isParakeet }
+			// Keep the default list short, but always surface cloud options.
+			return store.curatedModels.filter { $0.isParakeet || $0.isCloud }
 		}
 	}
 
 	private var hiddenModels: [CuratedModelInfo] {
-		store.curatedModels.filter { !$0.isParakeet }
+		store.curatedModels.filter { !$0.isParakeet && !$0.isCloud }
 	}
 
 	var body: some View {

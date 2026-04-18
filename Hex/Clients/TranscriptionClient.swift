@@ -33,6 +33,10 @@ struct TranscriptionClient {
   /// Checks if a named model is already downloaded on this system.
   var isModelDownloaded: @Sendable (String) async -> Bool = { _ in false }
 
+  /// Checks if a named model is ready to transcribe, whether via local assets
+  /// or cloud credentials.
+  var isModelReady: @Sendable (String) async -> Bool = { _ in false }
+
   /// Fetches a recommended set of models for the user's hardware from Hugging Face's `argmaxinc/whisperkit-coreml`.
   var getRecommendedModels: @Sendable () async throws -> ModelSupport
 
@@ -48,6 +52,7 @@ extension TranscriptionClient: DependencyKey {
       downloadModel: { try await live.downloadAndLoadModel(variant: $0, progressCallback: $1) },
       deleteModel: { try await live.deleteModel(variant: $0) },
       isModelDownloaded: { await live.isModelDownloaded($0) },
+      isModelReady: { await live.isModelReady($0) },
       getRecommendedModels: { await live.getRecommendedModels() },
       getAvailableModels: { try await live.getAvailableModels() }
     )
@@ -73,6 +78,7 @@ actor TranscriptionClientLive {
   /// The name of the currently loaded model, if any.
   private var currentModelName: String?
   private var parakeet: ParakeetClient = ParakeetClient()
+  private let groq = GroqSpeechClient()
 
   /// The base folder under which we store model data (e.g., ~/Library/Application Support/...).
   private lazy var modelsBaseFolder: URL = {
@@ -167,6 +173,9 @@ actor TranscriptionClientLive {
   /// Returns `true` if the model is already downloaded to the local folder.
   /// Performs a thorough check to ensure the model files are actually present and usable.
   func isModelDownloaded(_ modelName: String) async -> Bool {
+    guard !isGroq(modelName) else {
+      return false
+    }
     if isParakeet(modelName) {
       let available = await parakeet.isModelAvailable(modelName)
       parakeetLogger.debug("Parakeet available? \(available)")
@@ -202,6 +211,13 @@ actor TranscriptionClientLive {
     }
   }
 
+  func isModelReady(_ modelName: String) async -> Bool {
+    if isGroq(modelName) {
+      return GroqAPIKeyStore.hasAPIKey()
+    }
+    return await isModelDownloaded(modelName)
+  }
+
   /// Returns a list of recommended models based on current device hardware.
   func getRecommendedModels() async -> ModelSupport {
     await WhisperKit.recommendedRemoteModels()
@@ -228,6 +244,19 @@ actor TranscriptionClientLive {
     progressCallback: @escaping (Progress) -> Void
   ) async throws -> String {
     let startAll = Date()
+    if let groqModel = GroqTranscriptionModel(rawValue: model) {
+      transcriptionLogger.notice("Transcribing with Groq model=\(model) file=\(url.lastPathComponent)")
+      let overallProgress = Progress(totalUnitCount: 100)
+      overallProgress.completedUnitCount = 0
+      progressCallback(overallProgress)
+      let startTx = Date()
+      let text = try await groq.transcribe(url: url, model: groqModel, language: options.language)
+      overallProgress.completedUnitCount = 100
+      progressCallback(overallProgress)
+      transcriptionLogger.info("Groq transcription took \(String(format: "%.2f", Date().timeIntervalSince(startTx)))s")
+      transcriptionLogger.info("Groq request total elapsed \(String(format: "%.2f", Date().timeIntervalSince(startAll)))s")
+      return text
+    }
     if isParakeet(model) {
       transcriptionLogger.notice("Transcribing with Parakeet model=\(model) file=\(url.lastPathComponent)")
       let startLoad = Date()
@@ -299,6 +328,10 @@ actor TranscriptionClientLive {
 
   private func isParakeet(_ name: String) -> Bool {
     ParakeetModel(rawValue: name) != nil
+  }
+
+  private func isGroq(_ name: String) -> Bool {
+    GroqTranscriptionModel(rawValue: name) != nil
   }
 
   /// Creates or returns the local folder (on disk) for a given `variant` model.

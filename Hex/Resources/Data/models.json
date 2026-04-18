@@ -38,5 +38,25 @@
     "accuracyStars": 4,
     "speedStars": 2,
     "storageSize": "1.5GB"
+  },
+  {
+    "displayName": "Whisper Large v3",
+    "internalName": "whisper-large-v3",
+    "size": "Multilingual",
+    "accuracyStars": 5,
+    "speedStars": 5,
+    "storageSize": "Cloud",
+    "providerName": "Groq",
+    "symbolName": "cloud.fill"
+  },
+  {
+    "displayName": "Whisper Large v3 Turbo",
+    "internalName": "whisper-large-v3-turbo",
+    "size": "Multilingual",
+    "accuracyStars": 4,
+    "speedStars": 5,
+    "storageSize": "Cloud",
+    "providerName": "Groq",
+    "symbolName": "cloud.fill"
   }
 ]

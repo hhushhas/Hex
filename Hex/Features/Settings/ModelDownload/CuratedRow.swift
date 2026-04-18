@@ -32,6 +32,11 @@ struct CuratedRow: View {
 					HStack(spacing: 6) {
 						Text(model.displayName)
 							.font(.headline)
+						if let providerName = model.providerName, let symbolName = model.symbolName {
+							Label(providerName, systemImage: symbolName)
+								.font(.caption2)
+								foregroundStyle(.secondary)
+						}
 						if let badge = model.badge {
 							Text(badge)
 								.font(.caption2)
@@ -73,11 +78,20 @@ struct CuratedRow: View {
 								.tint(.blue)
 								.frame(width: 24, height: 24)
 								.help("Downloading… \(Int(store.downloadProgress * 100))%")
-						} else if model.isDownloaded {
+						} else if model.isReady {
 							Image(systemName: "checkmark.circle.fill")
 								.foregroundStyle(.green)
 								.frame(width: 24, height: 24)
-								.help("Downloaded")
+								.help(model.isCloud ? "Ready" : "Downloaded")
+						} else if model.isCloud {
+							Button {
+								store.send(.selectModel(model.internalName))
+							} label: {
+								Image(systemName: "key.fill")
+							}
+							.buttonStyle(.borderless)
+							.help("Add API key")
+							.frame(width: 24, height: 24)
 						} else {
 							Button {
 								store.send(.selectModel(model.internalName))
@@ -109,10 +123,17 @@ struct CuratedRow: View {
 			if store.isDownloading, store.downloadingModelName == model.internalName {
 				Button("Cancel Download", role: .destructive) { store.send(.cancelDownload) }
 			}
-			if model.isDownloaded || (store.isDownloading && store.downloadingModelName == model.internalName) {
+			if !model.isCloud, (model.isReady || (store.isDownloading && store.downloadingModelName == model.internalName)) {
 				Button("Show in Finder") { store.send(.openModelLocation) }
 			}
-			if model.isDownloaded {
+			if model.isCloud, model.isReady {
+				Divider()
+				Button("Clear API Key", role: .destructive) {
+					store.send(.selectModel(model.internalName))
+					store.send(.deleteGroqAPIKey)
+				}
+			}
+			if !model.isCloud, model.isReady {
 				Divider()
 				Button("Delete", role: .destructive) {
 					store.send(.selectModel(model.internalName))

@@ -220,7 +220,7 @@ struct AppFeature {
         await send(.modelStatusEvaluated(false))
         return
       }
-      let isReady = await transcription.isModelDownloaded(selectedModel)
+      let isReady = await transcription.isModelReady(selectedModel)
       $modelBootstrapState.withLock { state in
         state.modelIdentifier = selectedModel
         if state.modelDisplayName?.isEmpty ?? true {
