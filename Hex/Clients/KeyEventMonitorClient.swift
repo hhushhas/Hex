@@ -104,7 +104,9 @@ class KeyEventMonitorClientLive {
   private var hasPromptedForAccessibilityTrust = false
   @Shared(.hotkeyPermissionState) private var hotkeyPermissionState: HotkeyPermissionState
 
-  private let trustCheckIntervalNanoseconds: UInt64 = 100_000_000 // 100ms
+  // Polling TCC this aggressively can make freshly re-signed local installs feel hung
+  // while macOS re-evaluates Accessibility/Input Monitoring trust for the new identity.
+  private let trustCheckIntervalNanoseconds: UInt64 = 1_000_000_000 // 1s
 
   init() {
     logger.info("Initializing HotKeyClient with CGEvent tap.")
